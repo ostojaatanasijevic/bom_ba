@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use soup::prelude::*;
 use soup::NodeExt;
 
@@ -8,36 +10,65 @@ struct Part {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let artikli = query_mikro_princ(&args[1]);
-
-    println!("MIKROPRINC");
-    for artikl in artikli {
-        println!("{} :: {}", artikl.name, artikl.price);
-    }
-
-    println!("MGELECTRINIC");
-    let artikli = query_mg_electronic(&args[1]);
-    match artikli {
-        Some(artikli) => {
-            for artikl in artikli {
-                println!("{} :: {}", artikl.name, artikl.price);
-            }
-        }
-        None => (),
-    }
-}
-
-fn query_mikro_princ(part_name: &str) -> Vec<Part> {
-    let url = format!(
-        "https://www.mikroprinc.com/sr/pretraga?phrase={}&min_price=0.00&max_price=1170833.32&limit=80&sort%5Bprice%5D=1",
-        part_name
-        );
     let client = reqwest::blocking::Client::builder()
         .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
         .build()
         .unwrap();
 
+    loop {
+        println!("Unesi ime komponente:");
+
+        let mut query = String::new();
+        std::io::stdin().read_line(&mut query).unwrap();
+        let instant = std::time::Instant::now();
+
+        let artikli = query_mikro_princ(&client, &query);
+        println!("MIKROPRINC: \n");
+        for (n, artikl) in artikli.iter().enumerate() {
+            println!("{n}.{} :: {}", artikl.name, artikl.price);
+        }
+
+        let index = loop {
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+            let index = input[0..input.len() - 1].parse::<usize>();
+            match index {
+                Ok(val) => {
+                    if val < artikli.len() {
+                        break val;
+                    } else {
+                        println!("Nije u opsegu");
+                    }
+                }
+                Err(e) => println!("{e}"),
+            }
+        };
+
+        println!(
+            "{index}.{} :: {}",
+            artikli[index].name, artikli[index].price
+        );
+
+        println!("MGELECTRINIC: \n");
+        let artikli = query_mg_electronic(&client, &query);
+        match artikli {
+            Some(artikli) => {
+                for artikl in artikli {
+                    println!("{} :: {}", artikl.name, artikl.price);
+                }
+            }
+            None => (),
+        }
+
+        println!("Response time: {:.2}", instant.elapsed().as_secs_f32());
+    }
+}
+
+fn query_mikro_princ(client: &reqwest::blocking::Client, part_name: &str) -> Vec<Part> {
+    let url = format!(
+        "https://www.mikroprinc.com/sr/pretraga?phrase={}&min_price=0.00&max_price=1170833.32&limit=80&sort%5Bprice%5D=1",
+        part_name
+        );
     let returned_page = client.get(url).send().expect("PHFUCK!").text().unwrap();
     let soup = Soup::new(&returned_page);
 
@@ -87,7 +118,7 @@ fn query_mikro_princ(part_name: &str) -> Vec<Part> {
     artikli
 }
 
-fn query_mg_electronic(part_name: &str) -> Option<Vec<Part>> {
+fn query_mg_electronic(client: &reqwest::blocking::Client, part_name: &str) -> Option<Vec<Part>> {
     let url = format!(
         "https://www.mgelectronic.rs/search?Cid=0&As=true&Isc=true&Sid=true&q={}&AsUI=false&sos=false&orderby=10&pagesize=100&viewmode=list",
         part_name
