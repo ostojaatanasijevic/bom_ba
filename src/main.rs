@@ -9,8 +9,10 @@ use soup::NodeExt;
 struct Korpa {
     mg_artikli: Vec<(Part, usize)>,
     mikro_artikli: Vec<(Part, usize)>,
+    kelco_artikli: Vec<(Part, usize)>,
     mg_ukupno: f32,
     mikro_ukupno: f32,
+    kelco_ukupno: f32,
 }
 
 #[derive(Clone)]
@@ -21,16 +23,19 @@ struct Part {
 }
 
 fn main() {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
+        .build()
+        .unwrap();
+
     let mut korpa = Korpa {
         mg_artikli: Vec::new(),
         mikro_artikli: Vec::new(),
         mg_ukupno: 0.0,
         mikro_ukupno: 0.0,
+        kelco_artikli: Vec::new(),
+        kelco_ukupno: 0.0,
     };
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
-        .build()
-        .unwrap();
 
     loop {
         println!("Unesi ime komponente ili \"kraj kupovine\"");
@@ -49,11 +54,16 @@ fn main() {
         println!("MGELECTRINIC: \n");
         append_new_article(artikli, &mut korpa.mg_artikli);
 
+        let artikli = query_kelco(&client, "2n2222");
+        println!("KELCO: \n");
+        append_new_article(artikli, &mut korpa.kelco_artikli);
+
         println!("Unesi broj komada: ");
         let komada = get_usize_from_input(1000);
 
         korpa.mg_artikli.last_mut().unwrap().1 = komada;
         korpa.mikro_artikli.last_mut().unwrap().1 = komada;
+        korpa.kelco_artikli.last_mut().unwrap().1 = komada;
     }
 
     println!("Kupovina gotova, lista je:");
@@ -72,12 +82,20 @@ fn main() {
         );
         korpa.mikro_ukupno += artikal.0.price * artikal.1 as f32;
 
+        let artikal = korpa.kelco_artikli[i].clone();
+        print!(
+            "{} @ {} x {} \t",
+            artikal.0.name, artikal.0.price, artikal.1
+        );
+        korpa.kelco_ukupno += artikal.0.price * artikal.1 as f32;
+
         println!("");
     }
 
     println!("Ukupno:");
     print!("MG : {}\t", korpa.mg_ukupno);
     print!("Mikroprinc : {}\t", korpa.mikro_ukupno);
+    print!("Kelco: {}\t", korpa.kelco_ukupno);
 }
 
 fn append_new_article(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>) {
@@ -94,11 +112,68 @@ fn append_new_article(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>)
     }
 }
 
+fn query_kelco(client: &reqwest::blocking::Client, part_name: &str) -> Option<Vec<Part>> {
+    let url = format!(
+        "http://www.kelco.rs/katalog/komponente.php?q={}&search=",
+        part_name
+    );
+    let returned_page = client.get(url).send().expect("PHFUCK!").text().unwrap();
+    let soup = Soup::new(&returned_page);
+    let products_list = find_by_class(&soup, "div", "products_list").unwrap();
+    let products_list = find_by_class(&products_list, "div", "row").unwrap();
+    let artikli_obj = find_all_by_class(&products_list, "div", "asinItem");
+
+    let mut artikli = Vec::new();
+    for artikl_obj in artikli_obj {
+        let mut artikl = Part {
+            name: "".to_string(),
+            price: 0.0,
+            description: "".to_string(),
+        };
+
+        match find_by_class(&artikl_obj, "div", "pil_nameshort") {
+            Some(n) => {
+                let name = n.text();
+                let name = name.split("| ").nth(1).unwrap();
+                artikl.name = name.to_string();
+            }
+            None => {
+                println!("Ćorak");
+                continue;
+            }
+        };
+
+        match find_by_class(&artikl_obj, "div", "svecene") {
+            Some(n) => {
+                let price = trim_whitespace(&n.text().lines().nth(1).unwrap())
+                    .split_whitespace()
+                    .nth(0)
+                    .unwrap()
+                    .replace(",", ".")
+                    .parse::<f32>()
+                    .unwrap();
+                artikl.price = price;
+            }
+            None => {
+                println!("Ćorak");
+                continue;
+            }
+        };
+        artikli.push(artikl);
+    }
+
+    if artikli.len() == 0 {
+        return None;
+    }
+    Some(artikli)
+}
+
 fn query_mikro_princ(client: &reqwest::blocking::Client, part_name: &str) -> Option<Vec<Part>> {
     let url = format!(
         "https://www.mikroprinc.com/sr/pretraga?phrase={}&min_price=0.00&max_price=1170833.32&limit=80&sort[price]=1",
         part_name
         );
+
     let returned_page = client.get(url).send().expect("PHFUCK!").text().unwrap();
     let soup = Soup::new(&returned_page);
 
@@ -216,7 +291,6 @@ fn find_by_class<T: soup::QueryBuilderExt>(
 ) -> Option<Rc<markup5ever::rcdom::Node>> {
     let divs = soup.tag(tag).find_all();
 
-    let mut search_div = None;
     for div in divs {
         let class_loc = match div.get("class") {
             Some(c) => c,
@@ -224,11 +298,32 @@ fn find_by_class<T: soup::QueryBuilderExt>(
         };
 
         if class_loc == class {
-            search_div = Some(div);
+            return Some(div);
         }
     }
 
-    search_div
+    None
+}
+
+fn find_all_by_class<T: soup::QueryBuilderExt>(
+    soup: &T,
+    tag: &str,
+    class: &str,
+) -> Vec<Rc<markup5ever::rcdom::Node>> {
+    let divs = soup.tag(tag).find_all();
+    let mut out = Vec::new();
+    for div in divs {
+        let class_loc = match div.get("class") {
+            Some(c) => c,
+            None => continue,
+        };
+
+        if class_loc == class {
+            out.push(div);
+        }
+    }
+
+    out
 }
 
 pub fn trim_whitespace(s: &str) -> String {
