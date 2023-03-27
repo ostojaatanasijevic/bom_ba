@@ -1,18 +1,22 @@
 #[allow(unused_imports)]
 use markup5ever::rcdom::Node;
 use std::rc::Rc;
+use std::thread;
 use std::time::Instant;
 
 use soup::prelude::*;
 use soup::NodeExt;
 
+pub struct Prodavnica {
+    name: String,
+    query_fn: fn(String) -> Option<Vec<Part>>,
+    korpa: Korpa,
+    url: (String, String),
+}
+
 struct Korpa {
-    mg_artikli: Vec<(Part, usize)>,
-    mikro_artikli: Vec<(Part, usize)>,
-    kelco_artikli: Vec<(Part, usize)>,
-    mg_ukupno: f32,
-    mikro_ukupno: f32,
-    kelco_ukupno: f32,
+    artikli: Vec<(Part, usize)>,
+    ukupna_cena: f32,
 }
 
 #[derive(Clone)]
@@ -23,19 +27,51 @@ struct Part {
 }
 
 fn main() {
+    let mut prodavnice = Vec::new();
+
+    prodavnice.push(Prodavnica {
+        name: "Mikroprinc".to_string(),
+        query_fn: query_mikro_princ,
+        korpa: Korpa {
+            artikli: Vec::new(),
+            ukupna_cena: 0.0,
+        },
+        url: (
+            "https://www.mikroprinc.com/sr/pretraga?phrase=".to_string(),
+            "&min_price=0.00&max_price=1170833.32&limit=80&sort[price]=1".to_string(),
+        ),
+    });
+
+    prodavnice.push(Prodavnica {
+        name: "MG Elektronik".to_string(),
+        query_fn: query_mg_electronic,
+        korpa: Korpa {
+            artikli: Vec::new(),
+            ukupna_cena: 0.0,
+        },
+        url: (
+            "https://www.mgelectronic.rs/search?Cid=0&As=true&Isc=true&Sid=true&q=".to_string(),
+            "&AsUI=false&sos=false&orderby=10&pagesize=100&viewmode=list".to_string(),
+        ),
+    });
+
+    prodavnice.push(Prodavnica {
+        name: "Kelco".to_string(),
+        query_fn: query_kelco,
+        korpa: Korpa {
+            artikli: Vec::new(),
+            ukupna_cena: 0.0,
+        },
+        url: (
+            "http://www.kelco.rs/katalog/komponente.php?q=".to_string(),
+            "&search=".to_string(),
+        ),
+    });
+
     let client = reqwest::blocking::Client::builder()
         .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
         .build()
         .unwrap();
-
-    let mut korpa = Korpa {
-        mg_artikli: Vec::new(),
-        mikro_artikli: Vec::new(),
-        mg_ukupno: 0.0,
-        mikro_ukupno: 0.0,
-        kelco_artikli: Vec::new(),
-        kelco_ukupno: 0.0,
-    };
 
     loop {
         println!("Unesi ime komponente ili \"kraj kupovine\"");
@@ -46,59 +82,41 @@ fn main() {
             break;
         }
 
-        let artikli = query_mikro_princ(&client, &query);
-        println!("MIKROPRINC: \n");
-        append_new_article(artikli, &mut korpa.mikro_artikli);
-
-        let artikli = query_mg_electronic(&client, &query);
-        println!("MGELECTRINIC: \n");
-        append_new_article(artikli, &mut korpa.mg_artikli);
-
-        let artikli = query_kelco(&client, "2n2222");
-        println!("KELCO: \n");
-        append_new_article(artikli, &mut korpa.kelco_artikli);
+        let mut htmls = load_htmls(&query, &client, &prodavnice);
+        for prodavnica in prodavnice.iter_mut() {
+            let artikli = (prodavnica.query_fn)(htmls.remove(0));
+            println!("{}\n", prodavnica.name);
+            print_all_articles(artikli, &mut prodavnica.korpa.artikli);
+        }
 
         println!("Unesi broj komada: ");
         let komada = get_usize_from_input(1000);
 
-        korpa.mg_artikli.last_mut().unwrap().1 = komada;
-        korpa.mikro_artikli.last_mut().unwrap().1 = komada;
-        korpa.kelco_artikli.last_mut().unwrap().1 = komada;
+        for prodavnica in prodavnice.iter_mut() {
+            prodavnica.korpa.artikli.last_mut().unwrap().1 = komada;
+        }
     }
 
     println!("Kupovina gotova, lista je:");
-    for i in 0..korpa.mg_artikli.len() {
-        let artikal = korpa.mg_artikli[i].clone();
-        print!(
-            "{} @ {} x {} \t",
-            artikal.0.name, artikal.0.price, artikal.1
-        );
-        korpa.mg_ukupno += artikal.0.price * artikal.1 as f32;
-
-        let artikal = korpa.mikro_artikli[i].clone();
-        print!(
-            "{} @ {} x {} \t",
-            artikal.0.name, artikal.0.price, artikal.1
-        );
-        korpa.mikro_ukupno += artikal.0.price * artikal.1 as f32;
-
-        let artikal = korpa.kelco_artikli[i].clone();
-        print!(
-            "{} @ {} x {} \t",
-            artikal.0.name, artikal.0.price, artikal.1
-        );
-        korpa.kelco_ukupno += artikal.0.price * artikal.1 as f32;
-
+    for i in 0..prodavnice[0].korpa.artikli.len() {
+        for prodavnica in prodavnice.iter_mut() {
+            let artikal = prodavnica.korpa.artikli[i].clone();
+            print!(
+                "{} @ {} x {} \t",
+                artikal.0.name, artikal.0.price, artikal.1
+            );
+            prodavnica.korpa.ukupna_cena += artikal.0.price * artikal.1 as f32;
+        }
         println!("");
     }
 
     println!("Ukupno:");
-    print!("MG : {}\t", korpa.mg_ukupno);
-    print!("Mikroprinc : {}\t", korpa.mikro_ukupno);
-    print!("Kelco: {}\t", korpa.kelco_ukupno);
+    for prodavnica in prodavnice.iter() {
+        print!("{} : {}\t", prodavnica.name, prodavnica.korpa.ukupna_cena);
+    }
 }
 
-fn append_new_article(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>) {
+fn print_all_articles(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>) {
     match artikli {
         Some(artikli) => {
             for (n, artikl) in artikli.iter().enumerate() {
@@ -112,13 +130,9 @@ fn append_new_article(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>)
     }
 }
 
-fn query_kelco(client: &reqwest::blocking::Client, part_name: &str) -> Option<Vec<Part>> {
-    let url = format!(
-        "http://www.kelco.rs/katalog/komponente.php?q={}&search=",
-        part_name
-    );
-    let returned_page = client.get(url).send().expect("PHFUCK!").text().unwrap();
-    let soup = Soup::new(&returned_page);
+fn query_kelco(html: String) -> Option<Vec<Part>> {
+    let soup = Soup::new(&html);
+    //kelco ne vraća products_list ako je prazan, tkd , panic, uradi match
     let products_list = find_by_class(&soup, "div", "products_list").unwrap();
     let products_list = find_by_class(&products_list, "div", "row").unwrap();
     let artikli_obj = find_all_by_class(&products_list, "div", "asinItem");
@@ -168,15 +182,8 @@ fn query_kelco(client: &reqwest::blocking::Client, part_name: &str) -> Option<Ve
     Some(artikli)
 }
 
-fn query_mikro_princ(client: &reqwest::blocking::Client, part_name: &str) -> Option<Vec<Part>> {
-    let url = format!(
-        "https://www.mikroprinc.com/sr/pretraga?phrase={}&min_price=0.00&max_price=1170833.32&limit=80&sort[price]=1",
-        part_name
-        );
-
-    let returned_page = client.get(url).send().expect("PHFUCK!").text().unwrap();
-    let soup = Soup::new(&returned_page);
-
+fn query_mikro_princ(html: String) -> Option<Vec<Part>> {
+    let soup = Soup::new(&html);
     let search_div = find_by_class(&soup, "div", "products-table");
 
     let out = search_div.unwrap();
@@ -229,15 +236,8 @@ fn query_mikro_princ(client: &reqwest::blocking::Client, part_name: &str) -> Opt
     Some(artikli)
 }
 
-fn query_mg_electronic(client: &reqwest::blocking::Client, part_name: &str) -> Option<Vec<Part>> {
-    let url = format!(
-        "https://www.mgelectronic.rs/search?Cid=0&As=true&Isc=true&Sid=true&q={}&AsUI=false&sos=false&orderby=10&pagesize=100&viewmode=list",
-        part_name
-    );
-
-    let returned_page = client.get(url).send().expect("PHFUCK!").text().unwrap();
-    let soup = Soup::new(&returned_page);
-
+fn query_mg_electronic(html: String) -> Option<Vec<Part>> {
+    let soup = Soup::new(&html);
     let search_div = find_by_class(&soup, "div", "search-results");
     let out = match search_div {
         Some(sm) => sm.tag("div").find().unwrap(),
@@ -324,6 +324,38 @@ fn find_all_by_class<T: soup::QueryBuilderExt>(
     }
 
     out
+}
+
+pub fn load_htmls(
+    part_name: &str,
+    client: &reqwest::blocking::Client,
+    prodavnice: &Vec<Prodavnica>,
+) -> Vec<String> {
+    let mut urls = Vec::new();
+
+    for prodavnica in prodavnice {
+        urls.push(format!(
+            "{}{}{}",
+            prodavnica.url.0, part_name, prodavnica.url.1
+        ));
+    }
+
+    let mut handles = Vec::new();
+    let mut htmls = vec![String::new(); urls.len()];
+
+    for (n, url) in urls.into_iter().enumerate() {
+        let client = client.clone();
+        handles.push(thread::spawn(move || {
+            (n, client.get(&url).send().expect("PHFUCK!").text().unwrap())
+        }));
+    }
+
+    for handle in handles {
+        let out = handle.join().unwrap();
+        htmls[out.0] = out.1;
+    }
+
+    htmls
 }
 
 pub fn trim_whitespace(s: &str) -> String {
