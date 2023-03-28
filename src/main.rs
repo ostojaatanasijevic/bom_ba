@@ -7,6 +7,7 @@ use std::time::Instant;
 use soup::prelude::*;
 use soup::NodeExt;
 
+#[derive(Clone)]
 pub struct Prodavnica {
     name: String,
     query_fn: fn(String) -> Option<Vec<Part>>,
@@ -14,6 +15,7 @@ pub struct Prodavnica {
     url: (String, String),
 }
 
+#[derive(Clone)]
 struct Korpa {
     artikli: Vec<(Part, usize)>,
     ukupna_cena: f32,
@@ -82,17 +84,33 @@ fn main() {
             break;
         }
 
+        let mut to_be_removed = Vec::new();
         let mut htmls = load_htmls(&query, &client, &prodavnice);
-        for prodavnica in prodavnice.iter_mut() {
+        for (n, prodavnica) in prodavnice.iter_mut().enumerate() {
             let artikli = (prodavnica.query_fn)(htmls.remove(0));
             println!("{}\n", prodavnica.name);
-            print_all_articles(artikli, &mut prodavnica.korpa.artikli);
+            let to_remove = print_all_articles(n, artikli, &mut prodavnica.korpa.artikli);
+            match to_remove {
+                Some(index) => to_be_removed.push(index),
+                None => (),
+            }
+        }
+
+        let mut stare_prodavnice = prodavnice.clone();
+        prodavnice = Vec::new();
+        //pretakanje
+        for (n, prodaja) in stare_prodavnice.iter_mut().enumerate() {
+            if !to_be_removed.contains(&n) {
+                prodavnice.push(prodaja.clone());
+            }
         }
 
         println!("Unesi broj komada: ");
         let komada = get_usize_from_input(1000);
 
         for prodavnica in prodavnice.iter_mut() {
+            //unsafe, možda nema ništa
+            println!("{}", prodavnica.name);
             prodavnica.korpa.artikli.last_mut().unwrap().1 = komada;
         }
     }
@@ -116,7 +134,11 @@ fn main() {
     }
 }
 
-fn print_all_articles(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>) {
+fn print_all_articles(
+    n: usize,
+    artikli: Option<Vec<Part>>,
+    list: &mut Vec<(Part, usize)>,
+) -> Option<usize> {
     match artikli {
         Some(artikli) => {
             for (n, artikl) in artikli.iter().enumerate() {
@@ -126,16 +148,42 @@ fn print_all_articles(artikli: Option<Vec<Part>>, list: &mut Vec<(Part, usize)>)
             let index = get_usize_from_input(artikli.len());
             list.push((artikli[index].clone(), 0));
         }
-        None => (),
+        None => {
+            println!("Tražena komponenta nije dostupna u ovoj prodavnici, deal breaker? y/n");
+
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer).unwrap();
+            if answer.contains("y") {
+                return Some(n);
+            } else {
+                list.push((
+                    Part {
+                        name: "Ništa".to_string(),
+                        price: 0.0,
+                        description: "Ništa".to_string(),
+                    },
+                    0,
+                ));
+            }
+        }
     }
+
+    None
 }
 
 fn query_kelco(html: String) -> Option<Vec<Part>> {
     let soup = Soup::new(&html);
     //kelco ne vraća products_list ako je prazan, tkd , panic, uradi match
-    let products_list = find_by_class(&soup, "div", "products_list").unwrap();
-    let products_list = find_by_class(&products_list, "div", "row").unwrap();
-    let artikli_obj = find_all_by_class(&products_list, "div", "asinItem");
+    let products_list = match find_by_class(&soup, "div", "products_list") {
+        Some(p) => p,
+        None => return None,
+    };
+
+    let products_list_row = match find_by_class(&products_list, "div", "row") {
+        Some(p) => p,
+        None => return None,
+    };
+    let artikli_obj = find_all_by_class(&products_list_row, "div", "asinItem");
 
     let mut artikli = Vec::new();
     for artikl_obj in artikli_obj {
@@ -163,6 +211,7 @@ fn query_kelco(html: String) -> Option<Vec<Part>> {
                     .split_whitespace()
                     .nth(0)
                     .unwrap()
+                    .replace(".", "")
                     .replace(",", ".")
                     .parse::<f32>()
                     .unwrap();
@@ -217,7 +266,7 @@ fn query_mikro_princ(html: String) -> Option<Vec<Part>> {
                     }
                 };
 
-                artikl.price = match price_str.replace(",", ".").parse::<f32>() {
+                artikl.price = match price_str.replace(".", "").replace(",", ".").parse::<f32>() {
                     Ok(v) => v,
                     Err(e) => {
                         println!("Mikroprinc, failed to parse to f32, see: {e}");
@@ -272,6 +321,7 @@ fn query_mg_electronic(html: String) -> Option<Vec<Part>> {
                     .split("(")
                     .nth(0)
                     .expect("MGELEKTRONIK, failed to split at (, promenili su šablon")
+                    .replace(".", "")
                     .replace(",", ".")
                     .parse::<f32>()
                     .expect("MGELEKTRONIK, failed to split parse to float");
