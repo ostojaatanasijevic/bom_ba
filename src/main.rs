@@ -70,6 +70,19 @@ fn main() {
         ),
     });
 
+    prodavnice.push(Prodavnica {
+        name: "Proelekronik".to_string(),
+        query_fn: query_proelektronik,
+        korpa: Korpa {
+            artikli: Vec::new(),
+            ukupna_cena: 0.0,
+        },
+        url: (
+            "http://www.proelectronic.rs/pretraga?cat=0&q=".to_string(),
+            "".to_string(),
+        ),
+    });
+
     let client = reqwest::blocking::Client::builder()
         .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
         .build()
@@ -109,29 +122,57 @@ fn main() {
         let komada = get_usize_from_input(1000);
 
         for prodavnica in prodavnice.iter_mut() {
-            //unsafe, možda nema ništa
-            println!("{}", prodavnica.name);
             prodavnica.korpa.artikli.last_mut().unwrap().1 = komada;
         }
     }
 
     println!("Kupovina gotova, lista je:");
+    for prodavnica in prodavnice.iter_mut() {
+        let name = trunc_padd(&prodavnica.name, 48);
+        print!("{}|", name);
+    }
+    println!("");
     for i in 0..prodavnice[0].korpa.artikli.len() {
         for prodavnica in prodavnice.iter_mut() {
             let artikal = prodavnica.korpa.artikli[i].clone();
-            print!(
-                "{} @ {} x {} \t",
-                artikal.0.name, artikal.0.price, artikal.1
-            );
+            let name = trunc_padd(&artikal.0.name, 30);
+            let price = trunc_padd_start(&format!("{} RSD x {}", artikal.0.price, artikal.1), 18);
+
+            print!("{}{}|", name, price,);
             prodavnica.korpa.ukupna_cena += artikal.0.price * artikal.1 as f32;
         }
         println!("");
     }
 
-    println!("Ukupno:");
     for prodavnica in prodavnice.iter() {
-        print!("{} : {}\t", prodavnica.name, prodavnica.korpa.ukupna_cena);
+        let ukupna_cena = trunc_padd_start(&format!("{} RSD", prodavnica.korpa.ukupna_cena), 48);
+        print!("{}|", ukupna_cena);
     }
+    println!("");
+}
+
+fn trunc_padd(string: &str, n: usize) -> String {
+    let mut out = String::from(string);
+    if string.len() > n {
+        out = string[0..n].to_string();
+    } else {
+        while out.len() != n {
+            out.push_str(" ");
+        }
+    }
+    out
+}
+
+fn trunc_padd_start(string: &str, n: usize) -> String {
+    let mut out = String::from(string);
+    if string.len() > n {
+        out = string[0..n].to_string();
+    } else {
+        while out.len() != n {
+            out.insert_str(0, " ");
+        }
+    }
+    out
 }
 
 fn print_all_articles(
@@ -142,7 +183,9 @@ fn print_all_articles(
     match artikli {
         Some(artikli) => {
             for (n, artikl) in artikli.iter().enumerate() {
-                println!("{n}.{} :: {}", artikl.name, artikl.price);
+                let name = trunc_padd(&format!("{n}.{}", artikl.name), 30);
+                let price = trunc_padd_start(&artikl.price.to_string(), 10);
+                println!("{}{} RSD", name, price);
             }
 
             let index = get_usize_from_input(artikli.len());
@@ -327,6 +370,52 @@ fn query_mg_electronic(html: String) -> Option<Vec<Part>> {
                     .expect("MGELEKTRONIK, failed to split parse to float");
             }
         }
+
+        artikli.push(artikl);
+    }
+
+    Some(artikli)
+}
+
+fn query_proelektronik(html: String) -> Option<Vec<Part>> {
+    let soup = Soup::new(&html);
+    let search_div = match find_by_class(&soup, "div", "row row-fix-flex") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    //trs je lista proizvoda
+    let mut artikli = Vec::new();
+    let trs = find_all_by_class(&search_div, "div", "col-lg-3 col-md-4 col-sm-6 col-xs-12");
+    for tr in trs {
+        let name = match find_by_class(&tr, "div", "xs-product-name") {
+            Some(x) => match x.tag("a").find() {
+                Some(a) => trim_whitespace(&a.text()),
+                None => continue,
+            },
+            None => continue,
+        };
+
+        let price = match find_by_class(&tr, "div", "xs-product-price") {
+            Some(x) => trim_whitespace(&x.text()),
+            None => continue,
+        };
+
+        let price = price
+            .split_whitespace()
+            .nth(0)
+            .unwrap()
+            .replace(",", "")
+            .parse::<f32>()
+            .unwrap();
+
+        println!("{}  ::  {}", name, price);
+
+        let mut artikl = Part {
+            name: name,
+            price: price,
+            description: "".to_string(),
+        };
 
         artikli.push(artikl);
     }
