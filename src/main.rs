@@ -26,6 +26,7 @@ struct Part {
     name: String,
     price: f32,
     description: String,
+    link: String,
 }
 
 //Dodaj opis prodavnica u neki json fajl, ružno je u main-u
@@ -164,6 +165,13 @@ fn main() {
         print!("{}|", ukupna_cena);
     }
     println!("");
+
+    for prodavnica in prodavnice.iter() {
+        println!("{}", prodavnica.name);
+        for part in prodavnica.korpa.artikli.iter() {
+            println!("{} -> {}", trunc_padd(&part.0.name, 30), part.0.link);
+        }
+    }
 }
 
 fn trunc_padd(string: &str, n: usize) -> String {
@@ -219,6 +227,7 @@ fn print_all_articles(
                         name: "Ništa".to_string(),
                         price: 0.0,
                         description: "Ništa".to_string(),
+                        link: "".to_string(),
                     },
                     0,
                 ));
@@ -245,17 +254,14 @@ fn query_kelco(html: String) -> Option<Vec<Part>> {
 
     let mut artikli = Vec::new();
     for artikl_obj in artikli_obj {
-        let mut artikl = Part {
-            name: "".to_string(),
-            price: 0.0,
-            description: "".to_string(),
-        };
-
-        match find_by_class(&artikl_obj, "div", "pil_nameshort") {
+        let (name, link) = match find_by_class(&artikl_obj, "div", "pil_nameshort") {
             Some(n) => {
                 let name = n.text();
                 let name = name.split("| ").nth(1).unwrap();
-                artikl.name = name.to_string();
+                (
+                    name.to_string(),
+                    n.tag("a").find().unwrap().get("href").unwrap(),
+                )
             }
             None => {
                 println!("Ćorak");
@@ -263,23 +269,31 @@ fn query_kelco(html: String) -> Option<Vec<Part>> {
             }
         };
 
-        match find_by_class(&artikl_obj, "div", "svecene") {
-            Some(n) => {
-                let price = trim_whitespace(&n.text().lines().nth(1).unwrap())
-                    .split_whitespace()
-                    .nth(0)
-                    .unwrap()
-                    .replace(".", "")
-                    .replace(",", ".")
-                    .parse::<f32>()
-                    .unwrap();
-                artikl.price = price;
-            }
+        let link = format!("http://www.kelco.rs{}", &link[2..link.len()]);
+
+        let price = match find_by_class(&artikl_obj, "div", "svecene") {
+            Some(n) => trim_whitespace(&n.text().lines().nth(1).unwrap())
+                .split_whitespace()
+                .nth(0)
+                .unwrap()
+                .replace(".", "")
+                .replace(",", ".")
+                .parse::<f32>()
+                .unwrap(),
+
             None => {
                 println!("Ćorak");
                 continue;
             }
         };
+
+        let artikl = Part {
+            name,
+            price,
+            description: "".to_string(),
+            link,
+        };
+
         artikli.push(artikl);
     }
 
@@ -299,40 +313,35 @@ fn query_mikro_princ(html: String) -> Option<Vec<Part>> {
     let mut artikli = Vec::new();
     //trs je lista proizvoda
     for tr in trs {
-        let mut artikl = Part {
-            name: "".to_string(),
-            price: 0.0,
-            description: "".to_string(),
+        let (name, link) = match find_by_class(&tr, "div", "text-block") {
+            Some(n) => (
+                trim_whitespace(&n.tag("a").find().unwrap().text()),
+                n.tag("a").find().unwrap().get("href").unwrap(),
+            ),
+            None => continue,
         };
-        //podeli na komade
-        let title_node = tr.tag("div").find_all();
-        for n in title_node {
-            if n.get("class").unwrap() == "text-block" {
-                artikl.name = trim_whitespace(&n.tag("a").find().unwrap().text());
-            }
-        }
-        let price_node = tr.tag("div").find_all();
-        for n in price_node {
-            if n.get("class").unwrap() == "price" {
-                let price_str = trim_whitespace(&n.text());
-                let price_str = price_str.split_whitespace().nth(0);
-                let price_str = match price_str {
-                    Some(pr) => pr,
-                    None => {
-                        println!("Mikroprinc, failed to split at whitespace, promenili su šablon");
-                        return None;
-                    }
-                };
 
-                artikl.price = match price_str.replace(".", "").replace(",", ".").parse::<f32>() {
-                    Ok(v) => v,
-                    Err(e) => {
-                        println!("Mikroprinc, failed to parse to f32, see: {e}");
-                        return None;
-                    }
-                }
+        let price = match find_by_class(&tr, "div", "price") {
+            Some(n) => {
+                let price_str = trim_whitespace(&n.text());
+                price_str
+                    .split_whitespace()
+                    .nth(0)
+                    .unwrap()
+                    .replace(".", "")
+                    .replace(",", ".")
+                    .parse::<f32>()
+                    .unwrap()
             }
-        }
+            None => continue,
+        };
+
+        let artikl = Part {
+            name,
+            price,
+            description: "".to_string(),
+            link,
+        };
 
         artikli.push(artikl);
     }
@@ -360,31 +369,36 @@ fn query_mg_electronic(html: String) -> Option<Vec<Part>> {
     let mut artikli = Vec::new();
     //trs je lista proizvoda
     for tr in trs {
-        let mut artikl = Part {
-            name: "".to_string(),
-            price: 0.0,
-            description: "".to_string(),
-        };
         //podeli na komade
-        let title_node = tr.tag("h4").find_all();
-        for n in title_node {
-            if n.get("class").unwrap() == "list-view__title" {
-                artikl.name = trim_whitespace(&n.tag("a").find().unwrap().text());
-            }
-        }
-        let price_node = tr.tag("td").find_all();
-        for n in price_node {
-            if n.get("class").unwrap() == "list-view__cell list-view__price" {
-                artikl.price = trim_whitespace(&n.tag("li").find().unwrap().text())
-                    .split("(")
-                    .nth(0)
-                    .expect("MGELEKTRONIK, failed to split at (, promenili su šablon")
-                    .replace(".", "")
-                    .replace(",", ".")
-                    .parse::<f32>()
-                    .expect("MGELEKTRONIK, failed to split parse to float");
-            }
-        }
+        let title_node = match find_by_class(&tr, "h4", "list-view__title") {
+            Some(t) => t,
+            None => continue,
+        };
+
+        let (name, link) = match title_node.tag("a").find() {
+            Some(t) => (trim_whitespace(&t.text()), t.get("href").unwrap()),
+            None => continue,
+        };
+
+        let link = format!("https://www.mgelectronic.rs/{link}");
+        let price = match find_by_class(&tr, "td", "list-view__cell list-view__price") {
+            Some(t) => trim_whitespace(&t.tag("li").find().unwrap().text())
+                .split("(")
+                .nth(0)
+                .expect("MGELEKTRONIK, failed to split at (, promenili su šablon")
+                .replace(".", "")
+                .replace(",", ".")
+                .parse::<f32>()
+                .expect("MGELEKTRONIK, failed to split parse to float"),
+            None => continue,
+        };
+
+        let artikl = Part {
+            name,
+            price,
+            description: "".to_string(),
+            link,
+        };
 
         artikli.push(artikl);
     }
@@ -403,13 +417,15 @@ fn query_proelektronik(html: String) -> Option<Vec<Part>> {
     let mut artikli = Vec::new();
     let trs = find_all_by_class(&search_div, "div", "col-lg-3 col-md-4 col-sm-6 col-xs-12");
     for tr in trs {
-        let name = match find_by_class(&tr, "div", "xs-product-name") {
+        let (name, link) = match find_by_class(&tr, "div", "xs-product-name") {
             Some(x) => match x.tag("a").find() {
-                Some(a) => trim_whitespace(&a.text()),
+                Some(a) => (trim_whitespace(&a.text()), a.get("href").unwrap()),
                 None => continue,
             },
             None => continue,
         };
+
+        let link = format!("http://www.proelectronic.rs/{}", link);
 
         let price = match find_by_class(&tr, "div", "xs-product-price") {
             Some(x) => trim_whitespace(&x.text()),
@@ -424,12 +440,11 @@ fn query_proelektronik(html: String) -> Option<Vec<Part>> {
             .parse::<f32>()
             .unwrap();
 
-        println!("{}  ::  {}", name, price);
-
-        let mut artikl = Part {
-            name: name,
-            price: price,
+        let artikl = Part {
+            name,
+            price,
             description: "".to_string(),
+            link,
         };
 
         artikli.push(artikl);
@@ -453,13 +468,19 @@ fn query_interhit(html: String) -> Option<Vec<Part>> {
             Some(d) => d,
             None => continue,
         };
+        let name_div = match name_div.tag("a").find() {
+            Some(f) => f,
+            None => continue,
+        };
 
         let price_div = match find_by_class(&tr, "span", "price") {
             Some(d) => d,
             None => continue,
         };
 
-        let name = name_div.tag("a").find().unwrap().text();
+        let name = name_div.text();
+        let link = name_div.get("href").unwrap();
+
         let price = price_div
             .text()
             .split_whitespace()
@@ -470,10 +491,11 @@ fn query_interhit(html: String) -> Option<Vec<Part>> {
             .parse::<f32>()
             .unwrap();
 
-        let mut artikl = Part {
-            name: name,
-            price: price,
+        let artikl = Part {
+            name,
+            price,
             description: "".to_string(),
+            link,
         };
 
         artikli.push(artikl);
