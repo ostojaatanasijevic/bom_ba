@@ -28,7 +28,13 @@ struct Part {
     description: String,
 }
 
+//Dodaj opis prodavnica u neki json fajl, ružno je u main-u
 fn main() {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
+        .build()
+        .unwrap();
+
     let mut prodavnice = Vec::new();
 
     prodavnice.push(Prodavnica {
@@ -83,10 +89,19 @@ fn main() {
         ),
     });
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
-        .build()
-        .unwrap();
+    prodavnice.push(Prodavnica {
+        name: "Interhit".to_string(),
+        query_fn: query_interhit,
+        korpa: Korpa {
+            artikli: Vec::new(),
+            ukupna_cena: 0.0,
+        },
+        url: (
+            "http://www.interhit.rs/pretraga?orderby=position&orderway=desc&search_query="
+                .to_string(),
+            "&submit_search.x=0&submit_search.y=0".to_string(),
+        ),
+    });
 
     loop {
         println!("Unesi ime komponente ili \"kraj kupovine\"");
@@ -421,6 +436,71 @@ fn query_proelektronik(html: String) -> Option<Vec<Part>> {
     }
 
     Some(artikli)
+}
+
+fn query_interhit(html: String) -> Option<Vec<Part>> {
+    let soup = Soup::new(&html);
+    let search_div = match find_by_id(&soup, "ul", "product_list") {
+        Some(a) => a,
+        None => return None,
+    };
+
+    //trs je lista proizvoda
+    let mut artikli = Vec::new();
+    let trs = search_div.tag("li").find_all();
+    for tr in trs {
+        let name_div = match find_by_class(&tr, "div", "product-shop") {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let price_div = match find_by_class(&tr, "span", "price") {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let name = name_div.tag("a").find().unwrap().text();
+        let price = price_div
+            .text()
+            .split_whitespace()
+            .nth(0)
+            .unwrap()
+            .replace(".", "")
+            .replace(",", ".")
+            .parse::<f32>()
+            .unwrap();
+
+        let mut artikl = Part {
+            name: name,
+            price: price,
+            description: "".to_string(),
+        };
+
+        artikli.push(artikl);
+    }
+
+    Some(artikli)
+}
+
+fn find_by_id<T: soup::QueryBuilderExt>(
+    soup: &T,
+    tag: &str,
+    class: &str,
+) -> Option<Rc<markup5ever::rcdom::Node>> {
+    let divs = soup.tag(tag).find_all();
+
+    for div in divs {
+        let class_loc = match div.get("id") {
+            Some(c) => c,
+            None => continue,
+        };
+
+        if class_loc == class {
+            return Some(div);
+        }
+    }
+
+    None
 }
 
 fn find_by_class<T: soup::QueryBuilderExt>(
