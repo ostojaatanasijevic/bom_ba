@@ -116,6 +116,11 @@ fn main() {
         let mut to_be_removed = Vec::new();
         let mut htmls = load_htmls(&query, &client, &prodavnice);
         for (n, prodavnica) in prodavnice.iter_mut().enumerate() {
+            if htmls[0].len() < 10 {
+                println!("Prodavnica {} nije više pod istim domenom", prodavnica.name);
+                to_be_removed.push(n);
+                continue;
+            }
             let artikli = (prodavnica.query_fn)(htmls.remove(0));
             println!("{}\n", prodavnica.name);
             let to_remove = print_all_articles(n, artikli, &mut prodavnica.korpa.artikli);
@@ -586,14 +591,15 @@ pub fn load_htmls(
 
     for (n, url) in urls.into_iter().enumerate() {
         let client = client.clone();
-        handles.push(thread::spawn(move || {
-            (n, client.get(&url).send().expect("PHFUCK!").text().unwrap())
-        }));
+        handles.push(thread::spawn(move || (n, client.get(&url).send())));
     }
 
     for handle in handles {
         let out = handle.join().unwrap();
-        htmls[out.0] = out.1;
+        htmls[out.0] = match out.1 {
+            Ok(v) => v.text().unwrap(),
+            Err(_) => continue,
+        };
     }
 
     htmls
@@ -609,7 +615,8 @@ pub fn get_usize_from_input(opseg: usize) -> usize {
     let index = loop {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).unwrap();
-        let index = input[0..input.len() - 1].parse::<usize>();
+        let index = input.lines().nth(0).unwrap().parse::<usize>();
+        //        let index = input[0..input.len() - 1].parse::<usize>();
         match index {
             Ok(val) => {
                 if val < opseg {
