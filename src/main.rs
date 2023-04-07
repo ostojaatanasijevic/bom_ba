@@ -1,6 +1,8 @@
 #[allow(unused_imports)]
 use markup5ever::rcdom::Node;
+use reqwest::blocking::Client;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
@@ -29,12 +31,31 @@ struct Part {
     link: String,
 }
 
+//
+//
+// dodaj učitavanje celog BOM fajla,
+// koristeći standardnu interaktivnu petlju, dok se korisnik premišlja o odluci, redom učitavaj
+// htmlove
+//
+//
+
 //Dodaj opis prodavnica u neki json fajl, ružno je u main-u
 fn main() {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
-        .build()
-        .unwrap();
+    let mut parts: Vec<(String, i32)> = Vec::new();
+
+    loop {
+        println!("Unesi ime dela ili \"kraj kupovine\"");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).unwrap();
+        if answer.contains("kraj kupovine") {
+            break;
+        }
+        parts.push((answer.clone(), 0));
+        println!("Unesi broj komada");
+        let num = get_usize_from_input(1000) as i32;
+        let len = parts.len();
+        parts[len - 1].1 = num;
+    }
 
     let mut prodavnice = Vec::new();
 
@@ -104,17 +125,15 @@ fn main() {
         ),
     });
 
-    loop {
-        println!("Unesi ime komponente ili \"kraj kupovine\"");
+    let (tx, rx): (
+        std::sync::mpsc::Sender<Vec<String>>,
+        std::sync::mpsc::Receiver<Vec<String>>,
+    ) = mpsc::channel();
 
-        let mut query = String::new();
-        std::io::stdin().read_line(&mut query).unwrap();
-        if query.contains("kraj kupovine") {
-            break;
-        }
-
+    spawn_download_thread(&parts, &prodavnice, tx);
+    for part in parts.iter() {
         let mut to_be_removed = Vec::new();
-        let mut htmls = load_htmls(&query, &client, &prodavnice);
+        let mut htmls = rx.recv().unwrap();
         for (n, prodavnica) in prodavnice.iter_mut().enumerate() {
             if htmls[0].len() < 10 {
                 println!("Prodavnica {} nije više pod istim domenom", prodavnica.name);
@@ -138,35 +157,35 @@ fn main() {
                 prodavnice.push(prodaja.clone());
             }
         }
-
-        println!("Unesi broj komada: ");
-        let komada = get_usize_from_input(1000);
-
         for prodavnica in prodavnice.iter_mut() {
-            prodavnica.korpa.artikli.last_mut().unwrap().1 = komada;
+            prodavnica.korpa.artikli.last_mut().unwrap().1 = part.1 as usize;
         }
     }
 
     println!("Kupovina gotova, lista je:");
     for prodavnica in prodavnice.iter_mut() {
-        let name = trunc_padd(&prodavnica.name, 48);
+        let name = trunc_padd(&prodavnica.name, 25);
         print!("{}|", name);
     }
     println!("");
     for i in 0..prodavnice[0].korpa.artikli.len() {
         for prodavnica in prodavnice.iter_mut() {
+            let name = trunc_padd(&prodavnica.korpa.artikli[i].0.name, 25);
+            print!("{}|", name,);
+        }
+        println!("");
+        for prodavnica in prodavnice.iter_mut() {
             let artikal = prodavnica.korpa.artikli[i].clone();
-            let name = trunc_padd(&artikal.0.name, 30);
-            let price = trunc_padd_start(&format!("{} RSD x {}", artikal.0.price, artikal.1), 18);
+            let price = trunc_padd_start(&format!("{} RSD x {}", artikal.0.price, artikal.1), 25);
 
-            print!("{}{}|", name, price,);
+            print!("{}|", price,);
             prodavnica.korpa.ukupna_cena += artikal.0.price * artikal.1 as f32;
         }
         println!("");
     }
 
     for prodavnica in prodavnice.iter() {
-        let ukupna_cena = trunc_padd_start(&format!("{} RSD", prodavnica.korpa.ukupna_cena), 48);
+        let ukupna_cena = trunc_padd_start(&format!("{} RSD", prodavnica.korpa.ukupna_cena), 25);
         print!("{}|", ukupna_cena);
     }
     println!("");
@@ -174,9 +193,32 @@ fn main() {
     for prodavnica in prodavnice.iter() {
         println!("{}", prodavnica.name);
         for part in prodavnica.korpa.artikli.iter() {
-            println!("{} -> {}", trunc_padd(&part.0.name, 30), part.0.link);
+            println!("{} -> {}", trunc_padd(&part.0.name, 25), part.0.link);
         }
     }
+}
+
+fn spawn_download_thread(
+    parts: &Vec<(String, i32)>,
+    prodavnice: &Vec<Prodavnica>,
+    tx: std::sync::mpsc::Sender<Vec<String>>,
+) {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
+        .build()
+        .unwrap();
+
+    let part_d = parts.clone();
+    let pro_d = prodavnice.clone();
+    thread::spawn(move || {
+        let parts = part_d;
+        let prodavnice = pro_d;
+
+        for part in parts {
+            let htmls = load_htmls(&part.0, &client, &prodavnice);
+            tx.send(htmls);
+        }
+    });
 }
 
 fn trunc_padd(string: &str, n: usize) -> String {
@@ -216,6 +258,7 @@ fn print_all_articles(
                 println!("{}{} RSD", name, price);
             }
 
+            println!("Unesi rednu cifru gore navedenog artikala koji želiš da kupiš");
             let index = get_usize_from_input(artikli.len());
             list.push((artikli[index].clone(), 0));
         }
@@ -229,9 +272,9 @@ fn print_all_articles(
             } else {
                 list.push((
                     Part {
-                        name: "Ništa".to_string(),
+                        name: "None".to_string(),
                         price: 0.0,
-                        description: "Ništa".to_string(),
+                        description: "None".to_string(),
                         link: "".to_string(),
                     },
                     0,
@@ -455,6 +498,9 @@ fn query_proelektronik(html: String) -> Option<Vec<Part>> {
         artikli.push(artikl);
     }
 
+    if artikli.len() == 0 {
+        return None;
+    }
     Some(artikli)
 }
 
