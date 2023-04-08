@@ -1,6 +1,8 @@
-#[allow(unused_imports)]
 use markup5ever::rcdom::Node;
 use reqwest::blocking::Client;
+#[allow(unused_imports)]
+use std::collections::HashMap;
+use std::fs;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
@@ -39,91 +41,81 @@ struct Part {
 //
 //
 
+pub const EXIT_KEYWORD: &str = "kraj liste";
 //Dodaj opis prodavnica u neki json fajl, ružno je u main-u
 fn main() {
-    let mut parts: Vec<(String, i32)> = Vec::new();
-
-    loop {
-        println!("Unesi ime dela ili \"kraj kupovine\"");
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer).unwrap();
-        if answer.contains("kraj kupovine") {
-            break;
+    let parts: Vec<(String, i32)> = match std::env::args().nth(1) {
+        Some(file_name) => {
+            let mut parts: Vec<(String, i32)> = Vec::new();
+            println!("Reading {file_name}");
+            if file_name.ends_with(".csv") {
+                let content: String = fs::read_to_string(file_name)
+                    .expect("File not found")
+                    .parse()
+                    .expect("Can't parse file");
+                let lines = content.lines();
+                for line in lines {
+                    let split = line.split(",");
+                    parts.push((
+                        split
+                            .clone()
+                            .nth(0)
+                            .expect("Fajl nije pravilno formatiran")
+                            .to_string(),
+                        split
+                            .clone()
+                            .nth(1)
+                            .expect("Fajl nije pravilno formatiran")
+                            .parse::<i32>()
+                            .unwrap(),
+                    ));
+                }
+            }
+            parts
         }
-        parts.push((answer.clone(), 0));
-        println!("Unesi broj komada");
-        let num = get_usize_from_input(1000) as i32;
-        let len = parts.len();
-        parts[len - 1].1 = num;
-    }
+        None => {
+            let mut parts: Vec<(String, i32)> = Vec::new();
+            loop {
+                println!("Unesi ime dela ili \"{EXIT_KEYWORD}\"");
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).unwrap();
+                if answer.contains(EXIT_KEYWORD) {
+                    break;
+                }
+                parts.push((answer.clone(), 0));
+                println!("Unesi broj komada");
+                let num = get_usize_from_input(1000) as i32;
+                let len = parts.len();
+                parts[len - 1].1 = num;
+            }
+
+            parts
+        }
+    };
 
     let mut prodavnice = Vec::new();
+    let prod = fs::read_to_string("prodavnice")
+        .expect("Nije pronadjen fajl prodavnice")
+        .parse::<String>()
+        .unwrap();
+    let lines = prod.lines();
 
-    prodavnice.push(Prodavnica {
-        name: "Mikroprinc".to_string(),
-        query_fn: query_mikro_princ,
-        korpa: Korpa {
-            artikli: Vec::new(),
-            ukupna_cena: 0.0,
-        },
-        url: (
-            "https://www.mikroprinc.com/sr/pretraga?phrase=".to_string(),
-            "&min_price=0.00&max_price=1170833.32&limit=80&sort[price]=1".to_string(),
-        ),
-    });
-
-    prodavnice.push(Prodavnica {
-        name: "MG Elektronik".to_string(),
-        query_fn: query_mg_electronic,
-        korpa: Korpa {
-            artikli: Vec::new(),
-            ukupna_cena: 0.0,
-        },
-        url: (
-            "https://www.mgelectronic.rs/search?Cid=0&As=true&Isc=true&Sid=true&q=".to_string(),
-            "&AsUI=false&sos=false&orderby=10&pagesize=100&viewmode=list".to_string(),
-        ),
-    });
-
-    prodavnice.push(Prodavnica {
-        name: "Kelco".to_string(),
-        query_fn: query_kelco,
-        korpa: Korpa {
-            artikli: Vec::new(),
-            ukupna_cena: 0.0,
-        },
-        url: (
-            "http://www.kelco.rs/katalog/komponente.php?q=".to_string(),
-            "&search=".to_string(),
-        ),
-    });
-
-    prodavnice.push(Prodavnica {
-        name: "Proelekronik".to_string(),
-        query_fn: query_proelektronik,
-        korpa: Korpa {
-            artikli: Vec::new(),
-            ukupna_cena: 0.0,
-        },
-        url: (
-            "http://www.proelectronic.rs/pretraga?cat=0&q=".to_string(),
-            "".to_string(),
-        ),
-    });
-
-    prodavnice.push(Prodavnica {
-        name: "Interhit".to_string(),
-        query_fn: query_interhit,
-        korpa: Korpa {
-            artikli: Vec::new(),
-            ukupna_cena: 0.0,
-        },
-        url: (
-            "http://www.interhit.rs/pretraga?orderby=position&orderway=desc&search_query="
-                .to_string(),
-            "&submit_search.x=0&submit_search.y=0".to_string(),
-        ),
-    });
+    for line in lines {
+        let split = line.split(",");
+        let name = split.clone().nth(0).unwrap().to_string();
+        prodavnice.push(Prodavnica {
+            query_fn: key_to_fn(&name),
+            name,
+            korpa: Korpa {
+                artikli: Vec::new(),
+                ukupna_cena: 0.0,
+            },
+            url: (
+                split.clone().nth(1).unwrap().to_string(),
+                split.clone().nth(2).unwrap().to_string(),
+            ),
+        });
+    }
 
     let (tx, rx): (
         std::sync::mpsc::Sender<Vec<String>>,
@@ -455,6 +447,7 @@ fn query_mg_electronic(html: String) -> Option<Vec<Part>> {
 }
 
 fn query_proelektronik(html: String) -> Option<Vec<Part>> {
+    println!("porroor");
     let soup = Soup::new(&html);
     let search_div = match find_by_class(&soup, "div", "row row-fix-flex") {
         Some(a) => a,
@@ -675,4 +668,17 @@ pub fn get_usize_from_input(opseg: usize) -> usize {
         }
     };
     index
+}
+
+fn key_to_fn(key: &str) -> fn(String) -> Option<Vec<Part>> {
+    let out = match key {
+        "Mikroprinc" => query_mikro_princ,
+        "Interhit" => query_interhit,
+        "MG elektronik" => query_mg_electronic,
+        "Proelektronik" => query_proelektronik,
+        "Kelco" => query_kelco,
+        _ => query_kelco,
+    };
+
+    out
 }
