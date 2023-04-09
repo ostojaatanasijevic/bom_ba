@@ -94,11 +94,7 @@ fn main() {
     };
 
     let mut prodavnice = Vec::new();
-    let prod = fs::read_to_string("prodavnice")
-        .expect("Nije pronadjen fajl prodavnice")
-        .parse::<String>()
-        .unwrap();
-    let lines = prod.lines();
+    let lines = include_str!("prodavnice").lines();
 
     for line in lines {
         let split = line.split(",");
